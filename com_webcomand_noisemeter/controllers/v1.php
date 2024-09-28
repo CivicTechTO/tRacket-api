@@ -11,7 +11,7 @@ class v1 extends \io_comand_mvc\controller {
     const BASE_UUID = '6b4ea822-ebbd-11ee-8dc8-8b3876a5da56';
     const LOGIN_POLICY_UUID = '32b19866-1748-11ef-9272-997273e8313c';
     const REQUEST_METHOD = 'request'; // get, post or request (either)
-
+    
     private $log = null;
     private $db_timezone = null;
     private $base = null;
@@ -29,14 +29,14 @@ class v1 extends \io_comand_mvc\controller {
     }
     private function log_to_response() {
         $events = [];
-		    foreach($this->log as $event) {
+		foreach($this->log as $event) {
             $events []= (object)[
                 'timestamp' => date('Y-m-d\TH:i:s' . self::EASTERN_TIMEZONE_OFFSET, $event->Timestamp),
                 'type' => $event->Type,
                 'message' => $event->Message
             ];
-		    }
-    	  return $events;
+		}
+    	return $events;
     }
 
     private function set_base($object) {
@@ -93,6 +93,7 @@ class v1 extends \io_comand_mvc\controller {
      * Return a valid database timestamp or false.
      */
     private function get_timestamp($param) {
+
         $time = $this->request->{self::REQUEST_METHOD}($param);
         if($time === false) {
             return false;
@@ -103,6 +104,7 @@ class v1 extends \io_comand_mvc\controller {
         date_default_timezone_set('UTC');
         $time = date_create($time);
         date_default_timezone_set($default_tz);
+
         if($time === false) {
             return false;
         }
@@ -116,9 +118,9 @@ class v1 extends \io_comand_mvc\controller {
     /**
      * Display an error if no end point specified. 
      */
-    public function web__index() {
+	public function web__index() {
         return $this->error('No end point specified.');
-    }
+	}
 
     /**
      * parameters:
@@ -355,7 +357,14 @@ class v1 extends \io_comand_mvc\controller {
 
         $query =
             "SELECT OID AS id, Label as label, Latitude AS latitude, Longitude AS longitude, Radius AS radius, " .
-            "MAX(IF(@(NoiseLocation)NoiseDeviceHistory.RevisionEnd IN (NULL,'0000-00-00 00:00:00'),1,0)) AS active " .
+            "MAX(IF(@(NoiseLocation)NoiseDeviceHistory.RevisionEnd IN (NULL,'0000-00-00 00:00:00'),1,0)) AS active, " .
+            "DATE_FORMAT(IFNULL(@(NoiseLocation)NoiseLocationSummary.LastChecked,'0000-00-00 00:00:00'), '%Y-%m-%dT%H:%i:%s" . self::EASTERN_TIMEZONE_OFFSET . "') AS lastChecked, " .
+            "DATE_FORMAT(IFNULL(@(NoiseLocation)NoiseLocationSummary.LatestTimestamp,'0000-00-00 00:00:00'), '%Y-%m-%dT%H:%i:%s" . self::EASTERN_TIMEZONE_OFFSET . "') AS latestTimestamp, " .
+            "DATE_FORMAT(IFNULL(@(NoiseLocation)NoiseLocationSummary.HourStart,'0000-00-00 00:00:00'), '%Y-%m-%dT%H:%i:%s" . self::EASTERN_TIMEZONE_OFFSET . "') AS hourStart, " .
+            "DATE_FORMAT(IFNULL(@(NoiseLocation)NoiseLocationSummary.HourEnd,'0000-00-00 00:00:00'), '%Y-%m-%dT%H:%i:%s" . self::EASTERN_TIMEZONE_OFFSET . "') AS hourEnd, " .
+            "ROUND(@(NoiseLocation)NoiseLocationSummary.HourMin," . self::ROUND_PRECISION . ") AS hourMin, " .
+            "ROUND(@(NoiseLocation)NoiseLocationSummary.HourMax," . self::ROUND_PRECISION . ") AS hourMax, " .
+            "ROUND(@(NoiseLocation)NoiseLocationSummary.HourMean," . self::ROUND_PRECISION . ") AS hourMean " .
             "FROM NoiseLocation " .
             ($location_id !== null ? "WHERE OID=$location_id " : "") .
             "GROUP BY OID " .
@@ -638,7 +647,6 @@ class v1 extends \io_comand_mvc\controller {
 
     private function invalid_token() {
         // TODO: we should lockout an IP after X failed attempts to prevent hacks
-        // Could use webCOMAND Login Policy and related functionality for this and more.
         return $this->error('Invalid authorization token.');
     }
 
