@@ -1,5 +1,5 @@
 <?php
-namespace com_webcomand_noisemeter_api\controllers;
+namespace info_tracket_api\controllers;
 
 use io_comand_util\time;
 
@@ -12,6 +12,7 @@ class v1 extends \io_comand_mvc\controller {
     const LOGIN_POLICY_UUID = '32b19866-1748-11ef-9272-997273e8313c';
     const REQUEST_METHOD = 'request'; // get, post or request (either)
     
+    static private $timezone_offset = null;
     private $log = null;
     private $db_timezone = null;
     private $base = null;
@@ -19,6 +20,11 @@ class v1 extends \io_comand_mvc\controller {
     function __construct(array $options) {
         $this->log = new \io_comand_log\log();
         parent::__construct($options);
+    }
+
+    private function get_timezone_offset() {
+        return self::EASTERN_TIMEZONE_OFFSET;
+        //return date('P');
     }
 
     private function db_timezone() {
@@ -31,7 +37,7 @@ class v1 extends \io_comand_mvc\controller {
         $events = [];
 		foreach($this->log as $event) {
             $events []= (object)[
-                'timestamp' => date('Y-m-d\TH:i:s' . self::EASTERN_TIMEZONE_OFFSET, $event->Timestamp),
+                'timestamp' => date('Y-m-d\TH:i:s' . $this->get_timezone_offset(), $event->Timestamp),
                 'type' => $event->Type,
                 'message' => $event->Message
             ];
@@ -57,7 +63,7 @@ class v1 extends \io_comand_mvc\controller {
         $data = [
             'message' => $message,
             'result' => $type,
-            'timestamp' => date('Y-m-d\TH:i:s' . self::EASTERN_TIMEZONE_OFFSET)
+            'timestamp' => date('Y-m-d\TH:i:s' . $this->get_timezone_offset())
         ];
         if($this->log->count() > 0) {
             $data['log'] = $this->log_to_response();
@@ -166,7 +172,8 @@ class v1 extends \io_comand_mvc\controller {
         }
 
         // get the device by ID
-        $device = $this->repo()->get_first('FROM NoiseDevice WHERE DeviceID=? ORDER BY OID', ['bind'=>[$device_id]]);
+        $device = $this->repo()->get_first('SELECT OID, DATE_FORMAT(META(LastModified), "%Y-%m-%dT%H:%i:%s' . $this->get_timezone_offset() . '") AS LastModified FROM NoiseDevice WHERE DeviceID=? ORDER BY OID', ['bind'=>[$device_id]]);
+        //$device = $this->repo()->get_first('FROM NoiseDevice WHERE DeviceID=? ORDER BY OID', ['bind'=>[$device_id]]);
         if(!$device) {
             return $this->error('Unrecognized device.');
         }
@@ -216,12 +223,13 @@ class v1 extends \io_comand_mvc\controller {
             $measurement->SoftwareVersion = $version;
         }
 
-        $approved = $measurement->approve(['VersionNotes' => 'Added from v1 measurement API.']);
-        if(!$approved) {
+        try {
+            $measurement->approve(['VersionNotes' => 'Added from v1 measurement API.']);
+        } catch( \io_comand\exception $e ) {
             return $this->error('Could not add measurement.');
         }
 
-        return $this->ok('Added measurement (OID ' . $measurement->OID . ').');
+        return $this->ok('Added measurement (OID ' . $measurement->OID . ').', 200, ['device_last_modified' => $device->LastModified]);
     }
 
     public function web__measurements() {
@@ -246,7 +254,7 @@ class v1 extends \io_comand_mvc\controller {
         }
 
         // get the device by ID
-        $device = $this->repo()->get_first('FROM NoiseDevice WHERE DeviceID=? ORDER BY OID', ['bind'=>[$device_id]]);
+        $device = $this->repo()->get_first('SELECT OID, DATE_FORMAT(META(LastModified), "%Y-%m-%dT%H:%i:%s' . $this->get_timezone_offset() . '") AS LastModified FROM NoiseDevice WHERE DeviceID=? ORDER BY OID', ['bind'=>[$device_id]]);
         if(!$device) {
             return $this->error('Unrecognized device.');
         }
@@ -328,8 +336,9 @@ class v1 extends \io_comand_mvc\controller {
                 $measurement->SoftwareVersion = $m->version;
             }
 
-            $approved = $measurement->approve(['VersionNotes' => 'Added from v1 measurements API.']);
-            if(!$approved) {
+            try {
+                $measurement->approve(['VersionNotes' => 'Added from v1 measurements API.']);
+            } catch( \io_comand\exception $e ) {
                 $this->log->log_error('Could not add measurement.');
                 continue;
             }
@@ -338,7 +347,7 @@ class v1 extends \io_comand_mvc\controller {
         }
 
         $plural = (count($OIDs)==1 ? '' : 's');
-        return $this->ok('Added ' . count($OIDs) . ' measurement' . $plural . (count($OIDs)>0 ? ' (OID' . $plural . ': ' . implode(', ', $OIDs) . ')' : '') . '.');
+        return $this->ok('Added ' . count($OIDs) . ' measurement' . $plural . (count($OIDs)>0 ? ' (OID' . $plural . ': ' . implode(', ', $OIDs) . ')' : '') . '.', 200, ['device_last_modified' => $device->LastModified]);
     }
 
     /**
@@ -358,10 +367,10 @@ class v1 extends \io_comand_mvc\controller {
         $query =
             "SELECT OID AS id, Label as label, Latitude AS latitude, Longitude AS longitude, Radius AS radius, " .
             "MAX(IF(@(NoiseLocation)NoiseDeviceHistory.RevisionEnd IN (NULL,'0000-00-00 00:00:00'),1,0)) AS active, " .
-            "DATE_FORMAT(IFNULL(@(NoiseLocation)NoiseLocationSummary.LastChecked,'0000-00-00 00:00:00'), '%Y-%m-%dT%H:%i:%s" . self::EASTERN_TIMEZONE_OFFSET . "') AS lastChecked, " .
-            "DATE_FORMAT(IFNULL(@(NoiseLocation)NoiseLocationSummary.LatestTimestamp,'0000-00-00 00:00:00'), '%Y-%m-%dT%H:%i:%s" . self::EASTERN_TIMEZONE_OFFSET . "') AS latestTimestamp, " .
-            "DATE_FORMAT(IFNULL(@(NoiseLocation)NoiseLocationSummary.HourStart,'0000-00-00 00:00:00'), '%Y-%m-%dT%H:%i:%s" . self::EASTERN_TIMEZONE_OFFSET . "') AS hourStart, " .
-            "DATE_FORMAT(IFNULL(@(NoiseLocation)NoiseLocationSummary.HourEnd,'0000-00-00 00:00:00'), '%Y-%m-%dT%H:%i:%s" . self::EASTERN_TIMEZONE_OFFSET . "') AS hourEnd, " .
+            "DATE_FORMAT(IFNULL(@(NoiseLocation)NoiseLocationSummary.LastChecked,'0000-00-00 00:00:00'), '%Y-%m-%dT%H:%i:%s" . $this->get_timezone_offset() . "') AS lastChecked, " .
+            "DATE_FORMAT(IFNULL(@(NoiseLocation)NoiseLocationSummary.LatestTimestamp,'0000-00-00 00:00:00'), '%Y-%m-%dT%H:%i:%s" . $this->get_timezone_offset() . "') AS latestTimestamp, " .
+            "DATE_FORMAT(IFNULL(@(NoiseLocation)NoiseLocationSummary.HourStart,'0000-00-00 00:00:00'), '%Y-%m-%dT%H:%i:%s" . $this->get_timezone_offset() . "') AS hourStart, " .
+            "DATE_FORMAT(IFNULL(@(NoiseLocation)NoiseLocationSummary.HourEnd,'0000-00-00 00:00:00'), '%Y-%m-%dT%H:%i:%s" . $this->get_timezone_offset() . "') AS hourEnd, " .
             "ROUND(@(NoiseLocation)NoiseLocationSummary.HourMin," . self::ROUND_PRECISION . ") AS hourMin, " .
             "ROUND(@(NoiseLocation)NoiseLocationSummary.HourMax," . self::ROUND_PRECISION . ") AS hourMax, " .
             "ROUND(@(NoiseLocation)NoiseLocationSummary.HourMean," . self::ROUND_PRECISION . ") AS hourMean " .
@@ -387,7 +396,7 @@ class v1 extends \io_comand_mvc\controller {
     }
 
     private function get_location_noise(int $location_id, int $offset) {
-        $select_timestamp = "DATE_FORMAT(Timestamp, '%Y-%m-%dT%H:%i:%s" . self::EASTERN_TIMEZONE_OFFSET . "') AS timestamp, ";
+        $select_timestamp = "DATE_FORMAT(Timestamp, '%Y-%m-%dT%H:%i:%s" . $this->get_timezone_offset() . "') AS timestamp, ";
         $aggregate = false;
         $group_by = '';
         $order_by = "ORDER BY Timestamp, OID ";
@@ -397,12 +406,12 @@ class v1 extends \io_comand_mvc\controller {
         $end = $this->get_timestamp('end');
         $granularity = $this->request->{self::REQUEST_METHOD}('granularity');
         if($granularity == 'hourly') {
-            $hourly_timestamp = "DATE_FORMAT(Timestamp, '%Y-%m-%dT%H:00:00" . self::EASTERN_TIMEZONE_OFFSET . "')";
+            $hourly_timestamp = "DATE_FORMAT(Timestamp, '%Y-%m-%dT%H:00:00" . $this->get_timezone_offset() . "')";
             $select_timestamp = $hourly_timestamp . ' AS timestamp, ';
             $aggregate = true;
             $group_by = "GROUP BY $hourly_timestamp ";
         } elseif($granularity == 'life-time') {
-            $select_timestamp = 'MIN(Timestamp) AS start, MAX(Timestamp) AS end, COUNT() AS count, ';
+            $select_timestamp = 'MIN(Timestamp) AS start, MAX(Timestamp) AS end, COUNT() AS count, CEIL(COUNT()/' . self::PAGE_SIZE . ') AS pages, ' . self::PAGE_SIZE . ' AS page_size, ';
             $order_by = $limit = '';
             $aggregate = true;
         }
@@ -452,7 +461,9 @@ class v1 extends \io_comand_mvc\controller {
             $user->Email = $email;
             $user->Active = true;
             $user->DateRegistered = substr(time::get_db_timestamp(), 0, 10);
-            if(!$user->approve(['VersionNotes'=>'Added by API device registration.'])) {
+            try {
+                $user->approve(['VersionNotes'=>'Added by API device registration.']);
+            } catch( \io_comand\exception $e ) {
                 return $this->error('Email does not match a user.  New user could not be created.');
             }
 
@@ -461,7 +472,9 @@ class v1 extends \io_comand_mvc\controller {
             if($login_policy) {
                 // add the user to the Login Policy
                 $login_policy->Users []= $user;
-                if(!$login_policy->approve(['VersionNotes'=>'Updated by API device registration for user: $email.'])) {
+                try {
+                    $login_policy->approve(['VersionNotes'=>'Updated by API device registration for user: $email.']);
+                } catch( \io_comand\exception $e ) {
                     $this->log->log_error('User added, but could not be added to Login Policy.');
                 }
             } else {
@@ -479,7 +492,9 @@ class v1 extends \io_comand_mvc\controller {
             if($device_history) {
                 // expire current device user relationship
                 $device_history->RevisionEnd = $now;
-                if(!$device_history->approve(['VersionNote'=>'Set Revision End because new user registered device via API.'])) {
+                try {
+                    $device_history->approve(['VersionNote'=>'Set Revision End because new user registered device via API.']);
+                } catch( \io_comand\exception $e ) {
                     // if we could not approve the expiration of the existing device/user relationship, report an error
                     return $this->error('Could not add device history.');
                 }
@@ -491,7 +506,9 @@ class v1 extends \io_comand_mvc\controller {
             $device_config->RevisionStart = $now;
             $device_config->Device = $device;
             $device_config->User = $user;
-            if(!$device_config->approve()) {
+            try {
+                $device_config->approve();
+            } catch( \io_comand\exception $e ) {
                 // if we could not approve the user token for some reason, report an error
                 return $this->error('Could not add device history.');
             }
@@ -504,11 +521,20 @@ class v1 extends \io_comand_mvc\controller {
             $user_token = $this->repo()->new_object('UserToken');
             $user_token->User = $user;
             $user_token->ValidStart = time::get_timestamp();
-            if(!$user_token->approve()) {
+            try {
+                $user_token->approve();
+            } catch( \io_comand\exception $e ) {
                 // if we could not approve the user token for some reason, report an error
                 return $this->error('Could not create user token.');
             }
         }
+
+        /*
+        $device->Notify = TRUE;
+        if(!$device->approve(['VersionNotes'=>'Added by API device registration.'])) {
+            return $this->error('Could not enable device inactivity notifications.');
+        }
+        */
 
         // Send the registered user the registration confirmation email
         $this->email_registration_confirmation($email);
@@ -535,6 +561,18 @@ class v1 extends \io_comand_mvc\controller {
         }
         
         return TRUE;
+    }
+
+    /**
+     * Get a device configuration.
+     * 
+     * NOTE: User is already authorized before this is called.
+     */
+     private function get_config($device, $device_config) {
+        return $this->ok('Device configuration.', 200, [
+            'measurementFrequency' => $device->MeasurementFrequency,
+            'sendFrequency' => $device->SendFrequency,
+        ]);
     }
 
     /**
@@ -566,7 +604,9 @@ class v1 extends \io_comand_mvc\controller {
                 if($existing_location->Label != $public_label || $existing_location->PrivateLabel != $private_label) {
                     $existing_location->Label = $public_label;
                     $existing_location->PrivateLabel = $private_label;
-                    if(!$existing_location->approve()) {
+                    try {
+                        $existing_location->approve();
+                    } catch( \io_comand\exception $e ) {
                         return $this->error('Could not update existing location.');
                     }
                     $this->log->log_notice('Existing location public and/or private label updated.');
@@ -585,7 +625,9 @@ class v1 extends \io_comand_mvc\controller {
             $location->Latitude = $latitude;
             $location->Longitude = $longitude;
             $location->Radius = $radius;
-            if(!$location->approve()) {
+            try {
+                $location->approve();
+            } catch( \io_comand\exception $e ) {
                 return $this->error('Could not add location.');
             }
         }
@@ -596,7 +638,7 @@ class v1 extends \io_comand_mvc\controller {
         }
 
         // add the new device history and location
-        $new_config = clone $device_config;
+        $new_config = $device_config->clone();
         $new_config->RevisionStart = time::get_timestamp();
         $new_config->Location = $location;
 
@@ -607,10 +649,14 @@ class v1 extends \io_comand_mvc\controller {
         // if(!$this->new_collection($new_config, $device_config)->approve()) {
         //     return $this->error('Could not set location.');
         // }
-        if(!$new_config->approve()) {
+        try {
+            $new_config->approve();
+        } catch( \io_comand\exception $e ) {
             return $this->error('Could not set location.');
         }
-        if(!$device_config->approve()) {
+        try {
+            $device_config->approve();
+        } catch( \io_comand\exception $e ) {
             return $this->error('Could not expire previous location.');
         }
 
@@ -618,12 +664,20 @@ class v1 extends \io_comand_mvc\controller {
     }
 
     private function valid_token($device_config) {
-        // make sure a valid device config with an active User was passed in
-        if(!$device_config || !$device_config->User || !$device_config->User->Active) {
+        // make sure a valid device config with an active User and Device was passed in
+        if(!$device_config) {
+            \comand::log_warning('No Device History.');
+            return FALSE;
+        } elseif($device_config->User === null || !$device_config->User->Active) {
             // no valid device history or user (user must exist for a token to exist)
-            \comand::log_warning('No Device History with User for device (OID ' . $device_config->Device->OID . ').');
+            \comand::log_warning('Device History (OID ' . $device_config->OID . ') is not associated with an Active User.');
+            return FALSE;
+        } elseif(!$device_config->Device) {
+            \comand::log_warning('Device History (OID ' . $device_config->OID . ') is not associated with a Device.');
             return FALSE;
         }
+
+        \comand::log_notice('Device History (OID ' . $device_config->OID . ') is associated with Active User (OID ' . $device_config->User->OID . ').');
 
         // validate device token in Authorization header
         $authorization = $this->request->header('Authorization');
@@ -659,13 +713,16 @@ class v1 extends \io_comand_mvc\controller {
         // define device endpoints and if they require authentication
         $device_endpoints = [
             'register' => FALSE,
-            'set_location' => TRUE
+            'set_location' => TRUE,
+            'get_config' => TRUE,
         ];
 
-        if($endpoint === null || !array_key_exists($endpoint, $device_endpoints)) {
+        if($endpoint === null) {
+            $endpoint = 'get_config';
+        }
+        if(!array_key_exists($endpoint, $device_endpoints)) {
             return $this->error('Invalid device endpoint.');
         }
-        $requires_authorization = $device_endpoints[$endpoint];
 
         // get the device by ID (MD5 hash of MAC Address)
         $device_id = $this->request->header('X-Tracket-Device');
@@ -678,12 +735,13 @@ class v1 extends \io_comand_mvc\controller {
         }
 
         // if this endpoint does not require authentication, call the corresponding method and pass the device
+        $requires_authorization = $device_endpoints[$endpoint];
         if(!$requires_authorization) {
             return $this->{$endpoint}($device);
         }
 
         // get the User and Location of this device, if one exists
-        $device_config = $this->repo()->get_first("SELECT User, Location FROM NoiseDeviceHistory WHERE Device.OID=? AND RevisionEnd='0000-00-00 00:00:00' ORDER BY OID DESC", ['bind'=>[$device->OID]]);
+        $device_config = $this->repo()->get_first("SELECT User, NoiseLocation FROM NoiseDeviceHistory WHERE Device.OID=? AND RevisionEnd='0000-00-00 00:00:00' ORDER BY OID DESC", ['bind'=>[$device->OID]]);
         if(!$this->valid_token($device_config)) {
             return $this->invalid_token();
         }
@@ -702,7 +760,7 @@ class v1 extends \io_comand_mvc\controller {
         }
 
         $publication_doid = 66555;
-        $latest_update = $this->repo()->get_first("SELECT DATE_FORMAT(ReleaseTime, '%Y-%m-%dT%H:%i:%s" . self::EASTERN_TIMEZONE_OFFSET . "') AS ReleaseTime, Version, @(Object)PublicationRecord.Filename AS URL FROM DeviceUpdate WHERE @(Object)PublicationRecord.PublicationDOID=? ORDER BY ReleaseTime DESC LIMIT 1", ['bind'=>[$publication_doid]]);
+        $latest_update = $this->repo()->get_first("SELECT DATE_FORMAT(ReleaseTime, '%Y-%m-%dT%H:%i:%s" . $this->get_timezone_offset() . "') AS ReleaseTime, Version, @(Object)PublicationRecord.Filename AS URL FROM DeviceUpdate WHERE @(Object)PublicationRecord.PublicationDOID=? ORDER BY ReleaseTime DESC LIMIT 1", ['bind'=>[$publication_doid]]);
         if(!$latest_update) {
             return $this->error('Unable to find latest update information.');
         }
